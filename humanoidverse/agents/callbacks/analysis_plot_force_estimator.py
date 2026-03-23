@@ -1,103 +1,107 @@
-import torch
-from torch import Tensor
-from pathlib import Path
+import torch  # 导入 PyTorch 主包
+from torch import Tensor  # 导入张量类型
+from pathlib import Path  # 路径处理
 
-import matplotlib.pyplot as plt
-import numpy as np
-from collections import defaultdict
-from multiprocessing import Process, Value
+import matplotlib.pyplot as plt  # 绘图库
+import numpy as np  # 数值计算库
+from collections import defaultdict  # 字典工具
+from multiprocessing import Process, Value  # 多进程工具
 
-import plotly
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from flask import Flask, render_template
-from flask_socketio import SocketIO
-import threading
-import json
-from flask import send_file
+import plotly  # 交互式绘图库
+import plotly.graph_objects as go  # plotly 图形对象
+from plotly.subplots import make_subplots  # 子图工具
+from flask import Flask, render_template  # Web 服务与模板
+from flask_socketio import SocketIO  # WebSocket 支持
+import threading  # 线程工具
+import json  # JSON 处理
+from flask import send_file  # 文件发送
 
-from humanoidverse.agents.callbacks.base_callback import RL_EvalCallback
-from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBase
-from humanoidverse.agents.ppo.ppo import PPO
+from humanoidverse.agents.callbacks.base_callback import RL_EvalCallback  # 回调基类
+from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBase  # 机器人环境基类
+from humanoidverse.agents.ppo.ppo import PPO  # PPO 算法
 
-
+# 力估计分析与可视化回调类
 class AnalysisPlotForceEstimator(RL_EvalCallback):
-    training_loop: PPO
-    env: LeggedRobotBase
+    training_loop: PPO  # 训练主循环类型注解
+    env: LeggedRobotBase  # 环境类型注解
 
     def __init__(self, config, training_loop: PPO):
-        super().__init__(config, training_loop)
-        env: LeggedRobotBase = self.training_loop.env
+        super().__init__(config, training_loop)  # 初始化父类
+        env: LeggedRobotBase = self.training_loop.env  # 获取环境对象
         self.env = env
-        self.policy = self.training_loop._get_inference_policy()
-        self.num_envs = self.env.num_envs
-        self.logger = WebLogger(self.config.sim_dt)
-        self.reset_buffers()
-        self.log_single_robot = self.config.log_single_robot
+        self.policy = self.training_loop._get_inference_policy()  # 获取推理策略
+        self.num_envs = self.env.num_envs  # 并行环境数
+        self.logger = WebLogger(self.config.sim_dt)  # 初始化 Web 日志工具
+        self.reset_buffers()  # 初始化缓存
+        self.log_single_robot = self.config.log_single_robot  # 是否只记录单个机器人
 
     def reset_buffers(self):
-        self.obs_buf = [[] for _ in range(self.num_envs)]
-        self.critic_obs_buf = [[] for _ in range(self.num_envs)]
-        self.act_buf = [[] for _ in range(self.num_envs)]
+        # 初始化观测、动作等缓存
+        self.obs_buf = [[] for _ in range(self.num_envs)]  # 观测缓存
+        self.critic_obs_buf = [[] for _ in range(self.num_envs)]  # 价值观测缓存
+        self.act_buf = [[] for _ in range(self.num_envs)]  # 动作缓存
 
     def on_pre_evaluate_policy(self):
-        # Doing this in two lines because of type annotation issues.
-        self.robot_num_dofs = self.env.num_dofs
-        self.log_dof_pos_limits = self.env.dof_pos_limits.cpu().numpy()
-        self.log_dof_vel_limits = self.env.dof_vel_limits.cpu().numpy()
-        self.log_dof_torque_limits = self.env.torque_limits.cpu().numpy()
-        self.logger.set_robot_limits(self.log_dof_pos_limits, self.log_dof_vel_limits, self.log_dof_torque_limits)
-        self.logger.set_robot_num_dofs(self.robot_num_dofs)
+        # 策略评估前，记录机器人自由度和各项限制
+        self.robot_num_dofs = self.env.num_dofs  # 关节自由度数
+        self.log_dof_pos_limits = self.env.dof_pos_limits.cpu().numpy()  # 关节位置限制
+        self.log_dof_vel_limits = self.env.dof_vel_limits.cpu().numpy()  # 关节速度限制
+        self.log_dof_torque_limits = self.env.torque_limits.cpu().numpy()  # 关节力矩限制
+        self.logger.set_robot_limits(self.log_dof_pos_limits, self.log_dof_vel_limits, self.log_dof_torque_limits)  # 设置日志限制
+        self.logger.set_robot_num_dofs(self.robot_num_dofs)  # 设置自由度数
 
     def on_post_evaluate_policy(self):
+        # 策略评估后钩子（可扩展）
         pass
 
     def on_pre_eval_env_step(self, actor_state):
-        obs: Tensor = actor_state["obs"]["actor_obs"].cpu()
-        critic_obs: Tensor = actor_state["obs"]["critic_obs"].cpu()
-        actions: Tensor = actor_state["actions"].cpu()
-        left_force_estimated = actor_state["left_hand_force_estimator_output"].cpu()
-        right_force_estimated = actor_state["right_hand_force_estimator_output"].cpu()
+        # 环境步进前，记录观测、动作和力估计
+        obs: Tensor = actor_state["obs"]["actor_obs"].cpu()  # 策略观测
+        critic_obs: Tensor = actor_state["obs"]["critic_obs"].cpu()  # 价值观测
+        actions: Tensor = actor_state["actions"].cpu()  # 动作
+        left_force_estimated = actor_state["left_hand_force_estimator_output"].cpu()  # 左手力估计
+        right_force_estimated = actor_state["right_hand_force_estimator_output"].cpu()  # 右手力估计
 
         for i in range(self.num_envs):
-            self.obs_buf[i].append(obs[i])
-            self.critic_obs_buf[i].append(critic_obs[i])
-            self.act_buf[i].append(actions[i])
+            self.obs_buf[i].append(obs[i])  # 缓存观测
+            self.critic_obs_buf[i].append(critic_obs[i])  # 缓存价值观测
+            self.act_buf[i].append(actions[i])  # 缓存动作
     
-        rigid_body_pos = self.env._rigid_body_pos_extend
-        ref_body_pos = self.env.ref_body_pos_extend
-        vr_id = self.env.motion_tracking_id
+        rigid_body_pos = self.env._rigid_body_pos_extend  # 刚体位置
+        ref_body_pos = self.env.ref_body_pos_extend  # 参考刚体位置
+        vr_id = self.env.motion_tracking_id  # 运动跟踪 id
 
         if self.log_single_robot:
+            # 记录单个机器人各项状态
             self.logger.log_states(
                 {
-                'dof_pos_target': actions[0].cpu().numpy(),
-                'dof_pos': self.env.simulator.dof_pos[0].cpu().numpy(),
-                'dof_vel': self.env.simulator.dof_vel[0].cpu().numpy(),
-                'dof_torque': self.env.torques[0].cpu().numpy(),
-                'base_vel_x': self.env.base_lin_vel[0, 0].item(),
-                'base_vel_y': self.env.base_lin_vel[0, 1].item(),
-                'base_vel_z': self.env.base_lin_vel[0, 2].item(),
-                'base_vel_yaw': self.env.base_ang_vel[0, 2].item(),
-                'contact_forces_z': self.env.simulator.contact_forces[0, self.env.feet_indices, 2].cpu().numpy(),
-                'left_hand_force': self.env.apply_force_tensor[0, self.env.left_hand_link_index, :].cpu().numpy(),
-                'right_hand_force': self.env.apply_force_tensor[0, self.env.right_hand_link_index, :].cpu().numpy(),
-                'vr_3point_pos': ref_body_pos[0, vr_id, :].cpu().numpy(),
-                'vr_3point_pos_target': rigid_body_pos[0, vr_id, :].cpu().numpy(),
-                'left_force_estimated': left_force_estimated[0].cpu().numpy(),
-                'right_force_estimated': right_force_estimated[0].cpu().numpy(),
-                'feedforward_residual_tau': self.env.feedforward_residual_tau[0].cpu().numpy(),
-                'feedback_residual_tau': self.env.feedback_residual_tau[0].cpu().numpy(),
+                'dof_pos_target': actions[0].cpu().numpy(),  # 目标关节位置
+                'dof_pos': self.env.simulator.dof_pos[0].cpu().numpy(),  # 当前关节位置
+                'dof_vel': self.env.simulator.dof_vel[0].cpu().numpy(),  # 当前关节速度
+                'dof_torque': self.env.torques[0].cpu().numpy(),  # 当前关节力矩
+                'base_vel_x': self.env.base_lin_vel[0, 0].item(),  # 基座线速度 x
+                'base_vel_y': self.env.base_lin_vel[0, 1].item(),  # 基座线速度 y
+                'base_vel_z': self.env.base_lin_vel[0, 2].item(),  # 基座线速度 z
+                'base_vel_yaw': self.env.base_ang_vel[0, 2].item(),  # 基座角速度 yaw
+                'contact_forces_z': self.env.simulator.contact_forces[0, self.env.feet_indices, 2].cpu().numpy(),  # 足端接触力 z
+                'left_hand_force': self.env.apply_force_tensor[0, self.env.left_hand_link_index, :].cpu().numpy(),  # 左手实际力
+                'right_hand_force': self.env.apply_force_tensor[0, self.env.right_hand_link_index, :].cpu().numpy(),  # 右手实际力
+                'vr_3point_pos': ref_body_pos[0, vr_id, :].cpu().numpy(),  # 参考三点位置
+                'vr_3point_pos_target': rigid_body_pos[0, vr_id, :].cpu().numpy(),  # 目标三点位置
+                'left_force_estimated': left_force_estimated[0].cpu().numpy(),  # 左手估计力
+                'right_force_estimated': right_force_estimated[0].cpu().numpy(),  # 右手估计力
+                'feedforward_residual_tau': self.env.feedforward_residual_tau[0].cpu().numpy(),  # 前馈残差力矩
+                'feedback_residual_tau': self.env.feedback_residual_tau[0].cpu().numpy(),  # 反馈残差力矩
                 }
             )
         else:
-            # log average of all robots
+            # 记录所有机器人平均状态
             self.logger.log_states(
                 {
-                    'dof_pos_target': actions.mean(dim=0).cpu().numpy(),
-                    'dof_pos': self.env.simulator.dof_pos.mean(dim=0).cpu().numpy(),
-                    'dof_vel': self.env.simulator.dof_vel.mean(dim=0).cpu().numpy(),
-                    'dof_torque': self.env.torques.mean(dim=0).cpu().numpy(),
+                    'dof_pos_target': actions.mean(dim=0).cpu().numpy(),  # 平均目标关节位置
+                    'dof_pos': self.env.simulator.dof_pos.mean(dim=0).cpu().numpy(),  # 平均关节位置
+                    'dof_vel': self.env.simulator.dof_vel.mean(dim=0).cpu().numpy(),  # 平均关节速度
+                    'dof_torque': self.env.torques.mean(dim=0).cpu().numpy(),  # 平均关节力矩
                     'base_vel_x': self.env.base_lin_vel[:, 0].mean().item(),
                     'base_vel_y': self.env.base_lin_vel[:, 1].mean().item(),
                     'base_vel_z': self.env.base_lin_vel[:, 2].mean().item(),

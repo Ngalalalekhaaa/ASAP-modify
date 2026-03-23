@@ -17,7 +17,7 @@ from humanoidverse.utils.config_utils import *  # noqa: E402, F403
 from loguru import logger
 
 import threading
-# from pynput import keyboard
+from pynput import keyboard
 
 def on_press(key, env):
     try:
@@ -123,6 +123,9 @@ def main(override_config: OmegaConf):
         simulation_app = app_launcher.app
     if simulator_type == 'IsaacGym':
         import isaacgym
+    if simulator_type == 'Genesis' or simulator_type == 'genesis':
+        import genesis as gs
+        gs.init(backend=gs.gpu) # 初始化 Genesis GPU 后端
         
     from humanoidverse.agents.base_algo.base_algo import BaseAlgo  # noqa: E402
     from humanoidverse.utils.helpers import pre_process_config

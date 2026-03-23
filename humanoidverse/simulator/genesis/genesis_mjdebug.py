@@ -4,7 +4,9 @@ from loguru import logger
 # from isaacgym import gymtorch, gymapi, gymutil
 import torch
 import genesis as gs
-from genesis.engine.solvers.rigid.rigid_solver_decomp import RigidSolver
+#from genesis.engine.solvers.rigid.rigid_solver_decomp import RigidSolver
+from genesis.engine.solvers.rigid.rigid_solver import RigidSolver
+#from genesis.engine.solvers import RigidSolver
 from humanoidverse.simulator.genesis.tmp_gs_utils import *
 from humanoidverse.simulator.genesis.genesis_viewer import Viewer
 from humanoidverse.utils.torch_utils import to_torch, torch_rand_float
